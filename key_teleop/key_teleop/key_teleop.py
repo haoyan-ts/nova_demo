@@ -51,6 +51,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_system_default
 
 from dobot_msgs_v3.msg import ToolVectorActual
+from dobot_msgs_v3.srv import EnableRobot, RelMovL, SpeedFactor, DisableRobot, RelMovJ
 
 class Velocity(object):
 
@@ -126,6 +127,7 @@ class SimpleKeyTeleop(Node):
         super().__init__('key_teleop')
 
         self._interface: TextWindow = interface
+        self._is_enabled = False
 
         # self._publish_stamped_twist = self.declare_parameter('twist_stamped_enabled', False).value
 
@@ -137,22 +139,34 @@ class SimpleKeyTeleop(Node):
 
         self._pub_cmd = self.create_publisher(ToolVectorActual, 'key_vec', qos_profile_system_default)
 
+        self._enable_robot_srv = self.create_client(EnableRobot, '/dobot_bringup_v3/srv/EnableRobot')
+        self._disable_robot_srv = self.create_client(DisableRobot, '/dobot_bringup_v3/srv/DisableRobot')
+        self._relmovl_srv = self.create_client(RelMovL, '/dobot_bringup_v3/srv/RelMovL')
+        self._relmovj_srv = self.create_client(RelMovJ, '/dobot_bringup_v3/srv/RelMovJ')
+
         self._hz = self.declare_parameter('hz', 10).value
 
-        self._forward_rate = self.declare_parameter('forward_rate', 0.8).value
-        self._backward_rate = self.declare_parameter('backward_rate', 0.5).value
+        self._forward_rate = self.declare_parameter('forward_rate', 2).value
+        self._backward_rate = self.declare_parameter('backward_rate', 1).value
         # self._rotation_rate = self.declare_parameter('rotation_rate', 1.0).value
 
         self._last_pressed = {}
         # self._angular = 0
         self._linear = 0
 
+        self.init()
+
     movement_bindings = {
         curses.KEY_UP:    (1, 0, 0),
         curses.KEY_DOWN:  (-1, 0, 0),
         curses.KEY_LEFT:  (0,  1, 0),
         curses.KEY_RIGHT: (0, -1, 0),
+
     }
+
+    def init(self):
+        while not self._enable_robot_srv.wait_for_service(timeout_sec=1.0):                  # 循环等待服务器端成功启动
+            self.get_logger().info('service not available, waiting again...')
 
     def run(self):
         self._running = True
@@ -191,6 +205,7 @@ class SimpleKeyTeleop(Node):
             if now - self._last_pressed[a] < Duration(seconds=0.4):
                 keys.append(a)
         linear = [0.0, 0.0, 0.0]
+
         for k in keys:
             delta = self.movement_bindings[k]
             linear = [sum(x) for x in zip(linear, delta)]
@@ -206,6 +221,17 @@ class SimpleKeyTeleop(Node):
             self._running = False
             # TODO(artivis) no rclpy.signal_shutdown ?
             os.kill(os.getpid(), signal.SIGINT)
+
+        elif keycode == ord('1'):
+            self._interface.beep()
+
+            if self._is_enabled:
+                self._disable_robot()
+                self.get_logger().info('Robot disabled.')
+            else:
+                self._enable_robot()
+                self.get_logger().info('Robot enabled.')
+
         elif keycode in self.movement_bindings:
             self._last_pressed[keycode] = self.get_clock().now()
 
@@ -214,13 +240,12 @@ class SimpleKeyTeleop(Node):
         self._interface.write_line(5, 'Use arrow keys to move, q to exit.')
         self._interface.refresh()
 
-        # if self._publish_stamped_twist:
-        #     twist = self._make_twist_stamped(self._linear, self._angular)
-        # else:
-        #     twist = self._make_twist(self._linear, self._angular)
+        if self._is_enabled:
+            self._rel_move_l(self._linear)
 
-        move_vec = self._make_move(self._linear)
-        self._pub_cmd.publish(move_vec)
+        # self._rel_move_l(self._linear)
+        # move_vec = self._make_move(self._linear)
+        # self._pub_cmd.publish(move_vec)
 
     def _make_move(self, linear):
         move = ToolVectorActual()
@@ -230,6 +255,32 @@ class SimpleKeyTeleop(Node):
         move.z = linear[2]
 
         return move
+
+    def _rel_move_l(self, linear):
+        rel_p1 = RelMovL.Request()
+        rel_p1.offset1 = linear[0]
+        rel_p1.offset2 = linear[1]
+        rel_p1.offset3 = linear[2]
+        rel_p1.offset4 = float(0)
+        rel_p1.offset5 = float(0)
+        rel_p1.offset6 = float(0)
+        response = self._relmovl_srv.call_async(rel_p1)
+
+        self.get_logger().debug(f'Moving: {linear}. {response}')
+    
+    def _enable_robot(self):
+        enable_robot = EnableRobot.Request()
+        self.get_logger().info('Enabling robot...')
+        response = self._enable_robot_srv.call_async(enable_robot)
+        self.get_logger().info(f'Robot enabled. {response}')
+        self._is_enabled = True
+
+    def _disable_robot(self):
+        disable_robot = DisableRobot.Request()
+        self.get_logger().info('Disabling robot...')
+        response = self._disable_robot_srv.call_async(disable_robot)
+        self.get_logger().info(f'Robot disabled. {response}')
+        self._is_enabled = False
 
 
 def execute(stdscr):

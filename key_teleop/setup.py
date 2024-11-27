@@ -2,6 +2,7 @@ import os
 
 from setuptools import find_packages
 from setuptools import setup
+from glob import glob
 
 
 package_name = 'key_teleop'
@@ -15,8 +16,9 @@ setup(
     data_files=[
         (share_path, ['package.xml']),
         (os.path.join(share_path, 'config'), [os.path.join('config', f'{package_name}.yaml')]),
-        (os.path.join('share', 'ament_index', 'resource_index', 'packages'),
-         [os.path.join('resource', package_name)]),
+        (os.path.join('share', 'ament_index', 'resource_index', 'packages'), []),
+        (os.path.join('share', package_name), glob('launch/*.launch.py')),
+        (os.path.join('resource', package_name), []),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
